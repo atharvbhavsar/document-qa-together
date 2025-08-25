@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pinecone Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 {
+      color: #333;
+    }
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 20px;
+      margin-bottom: 20px;
+      background-color: #f9f9f9;
+    }
+    button {
+      background-color: #4CAF50;
+      border: none;
+      color: white;
+      padding: 10px 20px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 4px 2px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    pre {
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    .error {
+      color: red;
+    }
+    .success {
+      color: green;
+    }
+  </style>
+</head>
+<body>
+  <h1>Pinecone Connection Test</h1>
+  
+  <div class="card">
+    <h2>Current Configuration</h2>
+    <p><strong>API Key:</strong> <span id="apiKey">Loading...</span></p>
+    <p><strong>Index Name:</strong> <span id="indexName">Loading...</span></p>
+  </div>
+  
+  <div class="card">
+    <h2>Test Pinecone Connection</h2>
+    <button id="testConnection">Test Connection</button>
+    <div id="connectionResult"></div>
+  </div>
+  
+  <div class="card">
+    <h2>Test Vector Upload</h2>
+    <button id="testUpload">Test Vector Upload</button>
+    <div id="uploadResult"></div>
+  </div>
+  
+  <div class="card">
+    <h2>Test Vector Query</h2>
+    <button id="testQuery">Test Vector Query</button>
+    <div id="queryResult"></div>
+  </div>
+  
+  <script>
+    // Fetch configuration
+    async function fetchConfig() {
+      try {
+        const response = await fetch('/api/test/config');
+        const data = await response.json();
+        document.getElementById('apiKey').textContent = data.apiKey ? '***' + data.apiKey.slice(-4) : 'Not configured';
+        document.getElementById('indexName').textContent = data.indexName || 'Not configured';
+      } catch (error) {
+        document.getElementById('apiKey').textContent = 'Error fetching configuration';
+        document.getElementById('indexName').textContent = 'Error fetching configuration';
+      }
+    }
+    
+    // Test connection
+    document.getElementById('testConnection').addEventListener('click', async function() {
+      const resultDiv = document.getElementById('connectionResult');
+      resultDiv.innerHTML = '<p>Testing connection...</p>';
+      
+      try {
+        const response = await fetch('/api/test/connection');
+        const data = await response.json();
+        
+        if (data.success) {
+          resultDiv.innerHTML = `
+            <p class="success">✅ Connection successful</p>
+            <p>Found ${data.indexCount} indexes in your account</p>
+            <pre>${JSON.stringify(data.indexes, null, 2)}</pre>
+          `;
+        } else {
+          resultDiv.innerHTML = `
+            <p class="error">❌ Connection failed</p>
+            <p>${data.error}</p>
+          `;
+        }
+      } catch (error) {
+        resultDiv.innerHTML = `
+          <p class="error">❌ Test failed</p>
+          <p>Error: ${error.message}</p>
+        `;
+      }
+    });
+    
+    // Test upload
+    document.getElementById('testUpload').addEventListener('click', async function() {
+      const resultDiv = document.getElementById('uploadResult');
+      resultDiv.innerHTML = '<p>Testing vector upload...</p>';
+      
+      try {
+        const response = await fetch('/api/test/upload');
+        const data = await response.json();
+        
+        if (data.success) {
+          resultDiv.innerHTML = `
+            <p class="success">✅ Upload successful</p>
+            <p>Vector ID: ${data.id}</p>
+            <p>Dimension: ${data.dimension}</p>
+          `;
+        } else {
+          resultDiv.innerHTML = `
+            <p class="error">❌ Upload failed</p>
+            <p>${data.error}</p>
+            <pre>${data.details || ''}</pre>
+          `;
+        }
+      } catch (error) {
+        resultDiv.innerHTML = `
+          <p class="error">❌ Test failed</p>
+          <p>Error: ${error.message}</p>
+        `;
+      }
+    });
+    
+    // Test query
+    document.getElementById('testQuery').addEventListener('click', async function() {
+      const resultDiv = document.getElementById('queryResult');
+      resultDiv.innerHTML = '<p>Testing vector query...</p>';
+      
+      try {
+        const response = await fetch('/api/test/query');
+        const data = await response.json();
+        
+        if (data.success) {
+          resultDiv.innerHTML = `
+            <p class="success">✅ Query successful</p>
+            <p>Found ${data.matches.length} matches</p>
+            <pre>${JSON.stringify(data.matches, null, 2)}</pre>
+          `;
+        } else {
+          resultDiv.innerHTML = `
+            <p class="error">❌ Query failed</p>
+            <p>${data.error}</p>
+            <pre>${data.details || ''}</pre>
+          `;
+        }
+      } catch (error) {
+        resultDiv.innerHTML = `
+          <p class="error">❌ Test failed</p>
+          <p>Error: ${error.message}</p>
+        `;
+      }
+    });
+    
+    // Initialize
+    fetchConfig();
+  </script>
+</body>
+</html>

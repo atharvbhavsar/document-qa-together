@@ -1,0 +1,2 @@
+Server started at 2025-08-25T08:03:58.818Z
+2025-08-25T08:03:58.826Z: OCR test server running at http://localhost:3001

@@ -1,0 +1,7 @@
+This is a simple text file for OCR testing.
+It contains some text that should be readable by OCR software.
+The OCR system should be able to extract this text properly.
+
+Numbers and special characters: 1234567890 !@#$%^&*()_+
+
+Testing different fonts would require saving as a PDF or image.

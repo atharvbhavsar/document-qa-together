@@ -1,0 +1,297 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { genAI, CHAT_MODEL, USE_OLLAMA } from '@/lib/config';
+import { generateEmbedding } from '@/lib/document-processor';
+import { searchDocuments } from '@/lib/pinecone-utils';
+import { ChatMessage } from '@/lib/chat-context';
+
+export async function POST(request: NextRequest) {
+  try {
+    const { message, chatHistory, isSummary = false } = await request.json();
+    
+    if (!message || typeof message !== 'string') {
+      return NextResponse.json({ error: 'Message is required' }, { status: 400 });
+    }
+
+    console.log(`Processing chat request: "${message}"`);
+    
+    // Check if we have chat history
+    const hasHistory = Array.isArray(chatHistory) && chatHistory.length > 0;
+    if (hasHistory) {
+      console.log(`Request includes chat history with ${chatHistory.length} previous messages`);
+    }
+
+    // Generate embedding for the user's question
+    const questionEmbedding = await generateEmbedding(message);
+    
+    // For summaries, get more chunks to ensure comprehensive coverage
+    const chunkCount = isSummary ? 20 : 12;
+    let relevantChunks = await searchDocuments(questionEmbedding, chunkCount);
+  try {
+    const { message, chatHistory } = await request.json();
+    
+    if (!message || typeof message !== 'string') {
+      return NextResponse.json({ error: 'Message is required' }, { status: 400 });
+    }
+
+    console.log(`Processing chat request: "${message}"`);
+    
+    // Check if we have chat history
+    const hasHistory = Array.isArray(chatHistory) && chatHistory.length > 0;
+    if (hasHistory) {
+      console.log(`Request includes chat history with ${chatHistory.length} previous messages`);
+    }
+
+    // Generate embedding for the user's question
+    const questionEmbedding = await generateEmbedding(message);
+    
+    // Search for relevant document chunks - increase to 8 for better coverage
+    let relevantChunks = await searchDocuments(questionEmbedding, 12);
+    
+    if (relevantChunks.length === 0) {
+      return NextResponse.json({
+        response: "I couldn't find any relevant information in your documents. Please upload a document first, or ask a question about the documents you've uploaded.",
+      });
+    }
+    
+    // Log found documents to help with debugging
+    console.log(`Found ${relevantChunks.length} relevant chunks from documents:`);
+    const uniqueFiles = new Set();
+    relevantChunks.forEach(chunk => {
+      uniqueFiles.add(chunk.filename);
+    });
+    console.log(`Document sources: ${Array.from(uniqueFiles).join(', ')}`);
+    
+
+    // Prepare context from relevant chunks with citation information
+    const context = relevantChunks
+      .map((chunk, index) => {
+        const pageInfo = chunk.pageNumber ? ` (Page ${chunk.pageNumber})` : '';
+        return `[Document: ${chunk.filename}${pageInfo}]\n${chunk.text}`;
+      })
+      .join('\n\n');
+
+    // Prepare citations for the response
+    const citations = relevantChunks.map((chunk, index) => ({
+      filename: chunk.filename,
+      pageNumber: chunk.pageNumber,
+      text: chunk.text.substring(0, 150) + (chunk.text.length > 150 ? '...' : ''),
+      chunkIndex: index + 1
+    }));
+
+    // Analyze if the question might be about a specific document
+    const documentMentionMatch = message.match(/(?:in|on|from|about)(?:\s+my|\s+the)?\s+([a-zA-Z\s]+\.(?:pdf|docx|doc|txt))/i);
+    const documentTypeMatch = message.toLowerCase().includes('certificate') || 
+                             message.toLowerCase().includes('caste') ||
+                             message.toLowerCase().includes('validity');
+    
+    const isDocumentSpecificQuestion = documentMentionMatch || 
+                                      documentTypeMatch || 
+                                      message.toLowerCase().includes('document') ||
+                                      message.toLowerCase().includes('file');
+    
+    // Check if the user's question is about specific document content
+    const documentKeywords = [
+      'certificate', 'caste', 'validity', 'name', 'date', 'document', 
+      'id', 'number', 'issue', 'issued', 'authority', 'official', 
+      'expiry', 'expiration', 'holder', 'birth', 'address'
+    ];
+    const isDocumentContentQuestion = documentKeywords.some(keyword => message.toLowerCase().includes(keyword));
+    
+    // Check specifically for caste certificate questions
+    const isCasteCertificateQuestion = message.toLowerCase().includes('caste') || 
+                                      relevantChunks.some(chunk => 
+                                        (chunk.filename && chunk.filename.toLowerCase().includes('caste')) ||
+                                        (chunk.text && chunk.text.toLowerCase().includes('caste certificate')));
+    
+    // Build a more targeted prompt based on the question type
+    let promptPrefix = `You are a helpful AI assistant that answers questions based on the provided document context. `;
+    
+    if (isSummary) {
+      console.log('Summary request detected. Using comprehensive summarization prompt.');
+      promptPrefix = `You are an expert document summarizer. Your task is to create a comprehensive, well-structured summary of the provided documents. 
+
+For this summary request, please:
+1. **Overview**: Start with a brief overview of the documents provided
+2. **Key Information**: Extract and organize the most important information from each document
+3. **Document-by-Document**: Provide specific details from each document, including:
+   - Document type and purpose
+   - Key names, dates, numbers, and identifiers
+   - Important details specific to each document
+4. **Summary**: Conclude with a concise summary of the overall findings
+
+Organize the information clearly with headings and bullet points where appropriate. Be thorough but concise, ensuring no important information is missed.`;
+    } else if (isDocumentSpecificQuestion || isDocumentContentQuestion) {
+      console.log('Document-specific question detected. Using enhanced document analysis prompt.');
+      promptPrefix += `You are an expert at analyzing documents like certificates, forms, and official records. 
+      For this question which appears to be about document content, carefully analyze all the text content 
+      provided and extract the requested information. Pay special attention to names, dates, numbers, and 
+      official details that might be present in the document. If asked about a specific document like a 
+      certificate, look for information about the person's name, certificate details, dates, etc.`;
+      
+      // Add specific handling for caste certificate questions
+      if (isCasteCertificateQuestion) {
+        console.log('Caste certificate question detected. Using specialized certificate analysis prompt.');
+        promptPrefix += `\n\nYou are specifically analyzing a caste certificate document. These documents typically contain:
+        - The certificate holder's full name
+        - The holder's caste/category designation
+        - Certificate number or reference ID
+        - Date of issue
+        - Issuing authority (government office, official name)
+        - Validity information
+        - Parent/guardian names
+        - Address information
+        
+        When answering questions about this certificate, focus on accurately extracting this specific information.`;
+      }
+    }
+
+    // Format chat history if available
+    const formattedHistory = Array.isArray(chatHistory) && chatHistory.length > 0 
+      ? chatHistory
+          .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+          .join('\n\n')
+      : '';
+
+    // Create prompt for AI
+    const prompt = `${promptPrefix}
+Use only the information from the context to answer the user's question. If the context doesn't contain enough information to answer the question, say so clearly.
+
+You specialize in document analysis and extracting key information from documents like certificates, identity cards, forms, and other official documents. If asked about specific document content such as names, dates, addresses, ID numbers, or other details in a document, carefully extract this information from the provided context.
+
+Context from documents:
+${context}
+
+${formattedHistory ? `Previous conversation history:\n${formattedHistory}\n\n` : ''}
+
+User Question: ${message}
+
+Please provide a helpful and accurate answer based only on the information in the context above. When referencing specific information, mention which document it came from and include page numbers when available (e.g., "According to the caste certificate on page 1..."). For questions about specific details (like names, dates, numbers), search carefully through the entire context for that information.
+
+When you reference information from documents, try to be specific about the source and location when possible, as this will help users understand where the information comes from.
+
+When analyzing documents like certificates:
+1. Look for the document holder's name (often preceded by words like "Name:", "issued to:", etc.)
+2. Look for dates of issue, validity periods, or expiration dates
+3. Look for document numbers, serial numbers or reference numbers
+4. Look for issuing authorities, officials, or organizations
+5. Look for stamps, signatures, or verification marks (mentioned in the text)
+6. Look for caste/category information (for caste certificates)
+7. Look for parent/guardian names (often included in official documents)
+8. Look for address details and location information
+
+If the question asks about specific information from a caste certificate:
+- Pay special attention to the certificate holder's name and caste category
+- Note the issuing authority and date of issue
+- Include any validity information that's mentioned
+- Look for any registration or certificate numbers
+
+If you can't find certain information in the context, state clearly what you found and what information appears to be missing from the available context.`;
+
+    // Get response from either Ollama or Google Gemini
+    let aiResponse = '';
+    
+    if (USE_OLLAMA) {
+      // Use Ollama for chat
+      try {
+        const { generateOllamaResponse } = await import('@/lib/ollama-config');
+        aiResponse = await generateOllamaResponse(prompt);
+      } catch (error) {
+        console.error('Error with Ollama:', error);
+        throw new Error('Failed to generate response with Ollama. Make sure Ollama is running.');
+      }
+    } else {
+      // Use Google Gemini
+      if (!genAI) {
+        throw new Error('Google API is not configured. Please set USE_OLLAMA=true or provide a valid GOOGLE_API_KEY');
+      }
+      
+      const model = genAI.getGenerativeModel({ model: CHAT_MODEL });
+      
+      // Simple retry logic for rate limits
+      const maxRetries = 3;
+      let retryCount = 0;
+      let result;
+      let lastError = null;
+      
+      while (retryCount < maxRetries) {
+        try {
+          result = await model.generateContent(prompt);
+          aiResponse = result.response.text();
+          break; // Success, exit the loop
+        } catch (error: any) {
+          lastError = error;
+          
+          // Check if it's a rate limit error
+          const isRateLimitError = 
+            error.message && (
+              error.message.includes('Quota exceeded') ||
+              error.message.includes('rate limit') ||
+              error.message.includes('Too Many Requests') ||
+              error.message.includes('429')
+            );
+          
+          if (!isRateLimitError) {
+            throw error; // Not a rate limit error, rethrow immediately
+          }
+          
+          retryCount++;
+          
+          if (retryCount >= maxRetries) {
+            console.error(`Max retries (${maxRetries}) reached for rate limit.`);
+            throw error;
+          }
+          
+          // Calculate exponential backoff wait time (1s, 2s, 4s)
+          const waitTime = Math.pow(2, retryCount - 1) * 1000;
+          console.log(`Rate limit hit. Retrying in ${waitTime}ms (attempt ${retryCount}/${maxRetries})`);
+          
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
+      
+      if (!aiResponse) {
+        throw lastError || new Error('Failed to generate content after retries');
+      }
+    }
+
+    // Include source information with detailed citations
+    const sourceSet = new Set(relevantChunks.map(chunk => chunk.filename));
+    const sources = Array.from(sourceSet);
+
+    // Create detailed citations with page numbers and snippets
+    const detailedCitations = citations.filter(citation => citation.pageNumber || citation.filename).map(citation => ({
+      filename: citation.filename,
+      pageNumber: citation.pageNumber,
+      snippet: citation.text,
+      chunkIndex: citation.chunkIndex
+    }));
+
+    return NextResponse.json({
+      response: aiResponse,
+      sources,
+      citations: detailedCitations,
+      relevantChunks: relevantChunks.length
+    });
+
+  } catch (error) {
+    console.error('Chat error:', error);
+    
+    // Provide a more helpful error message for rate limits
+    if (error instanceof Error) {
+      if (error.message.includes('Quota exceeded')) {
+        return NextResponse.json({ 
+          error: 'The Google AI API rate limit has been reached. Please wait a moment and try again.' 
+        }, { status: 429 });
+      } else if (error.message.includes('Ollama')) {
+        return NextResponse.json({ 
+          error: 'Failed to connect to Ollama. Make sure Ollama is running on your machine.' 
+        }, { status: 500 });
+      }
+    }
+    
+    return NextResponse.json({ 
+      error: 'Failed to process your question. Please try again.' 
+    }, { status: 500 });
+  }
+}
